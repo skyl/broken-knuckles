@@ -17,7 +17,7 @@ Mostly, I have just been using the ipython notebook with pylab to run simulation
 
 You can enter the notebook, `ipython notebook --pylab inline`.
 
-.. code_block:: python
+::
 
     import pandas
     import game
