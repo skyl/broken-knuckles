@@ -1,119 +1,13 @@
+from __future__ import print_function
 import random
 
 from functools import partial
 from collections import defaultdict
 
 from cards import get_shuffled
+from dummy import DummyPlayer
+from util import get_hard_soft, is_21
 import basic_strategy as bs
-
-
-def get_hard_soft(hand):
-    hard = sum(hand)
-    soft = hard if (1 not in hand) else hard + 10
-    if soft > 21:
-        soft = hard
-    return hard, soft
-
-
-def is_21(hand):
-    if sum(hand) == 21:
-        return True
-    if (1 in hand) and (sum(hand) + 10 == 21):
-        return True
-    return False
-
-
-class DummyPlayer(object):
-
-
-    def __init__(self, hand, game, splits_left=None):
-        self.game = game
-        self.hand = hand
-        self.debug = self.game.debug
-        # allowed_splits is None if you can
-        # split infintely, otherwise the max num of splits
-        self.allowed_splits = game.allowed_splits
-        if splits_left is None:
-            self.splits_left = self.allowed_splits
-        else:
-            self.splits_left = splits_left
-        self.can_double_after_split = game.can_double_after_split
-
-    def play(self):
-
-        if self.debug:
-            print "DummyPlayer.play", self.hand
-        if is_21(self.hand):
-            if self.debug:
-                print "DummyPlayer, got 21"
-            return
-
-        move = self.get_move(self.hand)
-        if self.debug:
-            print "DummyPlayer to play", move
-
-        if move == "stand":
-            return
-
-        if move == "split":
-            if self.debug:
-                print "DummyPlayer to split with splits_left=", self.splits_left
-            self.splits_left -= 1
-            hand0 = [self.hand[0]]
-            hand1 = [self.hand[1]]
-            hand0.append(self.game.get_card())
-            hand1.append(self.game.get_card())
-            if self.debug:
-                print "DummyPlayer to play 2 hands", hand0, hand1
-                print "DummyPlayer now has splits_left=", self.splits_left
-            DummyPlayer(hand0, self.game, splits_left=self.splits_left).play()
-            DummyPlayer(hand1, self.game, splits_left=self.splits_left).play()
-            return
-
-        if move == "double":
-            self.hand.append(self.game.get_card())
-            if self.debug:
-                print "DummyPlayer doubled and ends with", self.hand
-            return
-
-        while move == "hit":
-            self.hand.append(self.game.get_card())
-            if self.debug:
-                print "DummyPlayer hit, now has", self.hand
-            if sum(self.hand) > 21:
-                if self.debug:
-                    print "DummyPlayer busted"
-                return
-            move = self.get_move(self.hand)
-
-    def get_move(self, hand):
-        # unfortunate duplication of Game.get_move FIXME
-        dealershows = self.game.dealershows
-        first = len(hand) == 2
-        hard, soft = get_hard_soft(hand)
-        can_split = first and (hand[0] == hand[1])
-
-        if can_split and bool(self.splits_left):
-            split = bs.basic_strategy_split[hand[0]][dealershows]
-            if split:
-                return "split"
-
-        use_hard = hard == soft
-        if use_hard:
-            move = bs.basic_strategy_hard[hard][dealershows]
-        else:
-            move = bs.basic_strategy_soft[soft][dealershows]
-
-        if self.allowed_splits is not None:
-            has_not_split = self.allowed_splits == self.splits_left
-        else:
-            has_not_split = self.splits_left == -1
-
-        can_double = first and (self.can_double_after_split or has_not_split)
-        if not can_double and move == "double":
-            move = "hit" if soft < 17 else "stand"
-
-        return move
 
 
 class Game(object):
@@ -127,6 +21,8 @@ class Game(object):
                  num_other_players=0,
                  get_bet=None):
         self.debug = debug
+        # allowed_splits is None for infinite splits
+        # otherwise the number of splits
         self.allowed_splits = allowed_splits
         self.can_double_after_split = can_double_after_split
         self.num_decks = num_decks
@@ -160,11 +56,15 @@ class Game(object):
     def dealershows(self):
         return self.dealer_hand[0]
 
+    @property
+    def dealer_hidden(self):
+        return self.dealer_hand[1]
+
     def shuffle(self):
         self.count = 0
         self.shoe = get_shuffled(self.num_decks)
         if self.debug:
-            print "shuffled", self.shoe
+            print("shuffled", self.shoe)
 
     def deal(self):
         self.dealer_hand = []
@@ -172,13 +72,13 @@ class Game(object):
         self.other_players = [[] for i in range(self.num_other_players)]
         self.deal_others_one()
         self.player_hand.append(self.get_card())
-        self.dealer_hand.append(self.get_card(False))
+        self.dealer_hand.append(self.get_card())
         self.deal_others_one()
         self.player_hand.append(self.get_card())
-        self.dealer_hand.append(self.get_card())
+        self.dealer_hand.append(self.get_card(False))
         if self.debug:
-            print "dealer=", self.dealer_hand
-            print "player=", self.player_hand
+            print("dealer=", self.dealer_hand)
+            print("player=", self.player_hand)
 
     def deal_others_one(self):
         [hand.append(self.get_card()) for hand in self.other_players]
@@ -211,68 +111,65 @@ class Game(object):
             self.dealer_hand.append(self.get_card())
             hard, soft = get_hard_soft(self.dealer_hand)
         if self.debug:
-            print "dealer done", self.dealer_hand
+            print("dealer done", self.dealer_hand)
         return soft
 
-    def eval_stand(self, hand, bet, dh):
+    def eval_stand(self, hand, bet):
         hard, soft = get_hard_soft(hand)
+        self.count_card(self.dealer_hidden)
         dealer_total = self.play_dealer()
         if self.debug:
-            print "dealer has", dealer_total
-            print "player hand", hand
+            print("dealer has", dealer_total)
+            print("player hand", hand)
         if dealer_total > 21:
             self.player_money += bet
-            self.count_card(dh)
             if self.debug:
-                print "dealer busted. adding bet=", bet
+                print("dealer busted. adding bet=", bet)
             return
         elif soft > dealer_total:
             self.player_money += bet
-            self.count_card(dh)
             if self.debug:
-                print "player wins", bet
+                print("player wins", bet)
             return
         elif soft == dealer_total:
-            self.count_card(dh)
             if self.debug:
-                print "push"
+                print("push")
             return
         else:
             self.player_money -= bet
-            self.count_card(dh)
             if self.debug:
-                print "player loses", bet
+                print("player loses", bet)
             return
 
     def evaluate_move(self, move, hand, bet):
-        dh = self.dealershows
+        dh = self.dealer_hidden
         if move == "stand":
 
             if self.debug:
                 hard, soft = get_hard_soft(hand)
-                print "player stands at", soft
+                print("player stands at", soft)
 
             if self.hands:
                 if self.debug:
-                    print "MULTIPLE HANDS", self.hands
+                    print("MULTIPLE HANDS", self.hands)
                 # wait until all hands are played before dealer plays
-                self.deferred.append(partial(self.eval_stand, hand, bet, dh))
+                self.deferred.append(partial(self.eval_stand, hand, bet))
                 self.safe_remove(hand)
                 return
             else:
-                return self.eval_stand(hand, bet, dh)
+                return self.eval_stand(hand, bet)
 
         if move == "hit":
             hand.append(self.get_card())
             hard, soft = get_hard_soft(hand)
             if self.debug:
-                print "player hit, now has", hand
+                print("player hit, now has", hand)
             if hard > 21:
                 self.safe_remove(hand)
                 self.player_money -= bet
                 self.count_card(dh)
                 if self.debug:
-                    print "player busted", hard, "loses", bet
+                    print("player busted", hard, "loses", bet)
                 if self.need_to_play_dealer():
                     self.play_dealer()
                 return
@@ -283,13 +180,13 @@ class Game(object):
             hand.append(self.get_card())
             hard, soft = get_hard_soft(hand)
             if self.debug:
-                print "player doubles, now has", hand
+                print("player doubles, now has", hand)
             if hard > 21:
                 self.safe_remove(hand)
                 self.player_money -= bet * 2
                 self.count_card(dh)
                 if self.debug:
-                    print "player doubled and busted", hard, "loses", bet * 2
+                    print("player doubled and busted", hard, "loses", bet * 2)
                 if self.need_to_play_dealer():
                     self.play_dealer()
                 return
@@ -335,42 +232,52 @@ class Game(object):
             has_not_split = self.splits_left == -1
 
         can_double = first and (self.can_double_after_split or has_not_split)
+        # not quite sure about this. strategy says double
+        # but, we can't double - we have split and not can_double_after_split.
+        # or, we have more than 2 cards, so the time for doubling is over.
+        # I think that means we hit ... always?
+        # should this be configurable or is there a hard rule?
         if not can_double and move == "double":
-            move = "hit" if soft < 17 else "stand"
+            move = "hit"  # if soft < 17 else "stand"
 
         return move
 
     def get_bet(self):
         return 1
 
-    def play_hand(self):
+    def shuffle_if_penetration_exceeded(self):
         start = self.num_decks * 52
         to_play = self.num_decks * self.penetration * 52
         if len(self.shoe) < (start - to_play):
             self.shuffle()
 
-        self.prior_count = self.count
-        self.prior_true_count = self.true_count
-        self.prior_money = self.player_money
-
+    def set_splits_left(self):
         if self.allowed_splits is not None:
             self.splits_left = self.allowed_splits
         else:
             self.splits_left = -1
 
+    def do_betting(self):
         bet = self.get_bet()
         if bet is None:
             if self.debug:
-                print "LEAVING TABLE"
+                print("LEAVING TABLE")
             self.shuffle()
             return
-
         self.bets.append(bet)
+        return bet
+
+    def play_hand(self):
+        self.shuffle_if_penetration_exceeded()
+        bet = self.do_betting()
+        if bet is None:
+            return
+        self.set_splits_left()
 
         if self.debug:
-            print "play_hand, count=", self.prior_count,
-            print "true=", self.true_count
-            print "bet", bet
+            print("play_hand, count=", self.count)
+            print("true=", self.true_count)
+            print("bet", bet)
 
         self.deal()
         # for now, we will always put the other players
@@ -379,7 +286,6 @@ class Game(object):
         self.do_other_players()
         self.do_hand(self.player_hand, bet)
         self.finish()
-
         self.money_trail.append(self.player_money)
 
     def do_other_players(self):
@@ -387,49 +293,40 @@ class Game(object):
             DummyPlayer(hand, self).play()
 
     def safe_remove(self, hand):
-        #if self.debug:
-        #    print "safe_remove", self.hands
-        #    print hand
         if hand not in self.hands:
             return
         if self.debug:
-            print "removing", hand, "from", self.hands
+            print("removing", hand, "from", self.hands)
         self.hands.remove(hand)
         if not self.hands:
             if self.debug:
-                print "EVAL deferreds in safe_remove"
+                print("EVAL deferreds in safe_remove")
             for f in self.deferred:
                 f()
             self.deferred = []
-            # not sure why but
-            # the call in play_hand doesn't work after split
-            # or, does it?
-            # self.finish()
+            self.finish()
 
     def finish(self):
-        # TODO, cleanup everything,
-        # plug this in where the hands can end
         if self.debug:
-            print "MONEY", self.player_money
-            print "COUNT", self.count
-            print "TOTAL HANDS", len(self.bets)
-            print
+            print("MONEY", self.player_money)
+            print("COUNT", self.count)
+            print("TOTAL HANDS", len(self.bets))
+            print()
 
     def do_hand(self, hand, bet, can_blackjack=True):
-
         if can_blackjack:
             if is_21(self.dealer_hand) and is_21(hand):
                 self.count_card(self.dealer_hand[0])
                 if self.debug:
-                    print "DUAL BLACKJACK!"
+                    print("DUAL BLACKJACK!")
                 return
             elif is_21(hand):
                 self.safe_remove(hand)
                 self.player_money += bet * self.blackjack_pays
                 self.count_card(self.dealer_hand[0])
                 if self.debug:
-                    print "PLAYER BLACKJACK!"
-                    print "player wins = ", bet * self.blackjack_pays
+                    print("PLAYER BLACKJACK!")
+                    print("player wins = ", bet * self.blackjack_pays)
                 if self.need_to_play_dealer():
                     self.play_dealer()
                 return
@@ -438,8 +335,8 @@ class Game(object):
                 self.player_money -= bet
                 self.count_card(self.dealer_hand[0])
                 if self.debug:
-                    print "DEALER BLACKJACK!"
-                    print "player loses = ", bet
+                    print("DEALER BLACKJACK!")
+                    print("player loses = ", bet)
                 return
 
         move = self.get_move(hand)
@@ -447,17 +344,13 @@ class Game(object):
             self.split_hand(hand, bet)
             return
 
-        while self.evaluate_move(move, hand, bet):
-            move = self.get_move(hand)
-            if move == "split":
-                self.split_hand(hand, bet)
-                break
-            else:
-                continue
+        self.evaluate_move(move, hand, bet)
 
     def split_hand(self, hand, bet):
-        if self.allowed_splits is not None:
-            self.splits_left -= 1
+        #if self.allowed_splits is not None:
+        # for infinite_splits we still count down from -1
+        # so that we can know if we have split for can_double_after_split
+        self.splits_left -= 1
         hand0 = [hand[0]]
         hand1 = [hand[1]]
         hand0.append(self.get_card())
@@ -467,7 +360,7 @@ class Game(object):
         self.hands.extend([hand0, hand1])
 
         if self.debug:
-          print "SPLIT", hand, hand0, hand1
+          print("SPLIT", hand, hand0, hand1)
 
         if self.one_card_after_split_aces and hand[0] == 1:
             self.evaluate_move("stand", hand0, bet)
@@ -492,26 +385,14 @@ class Game(object):
         return self.player_money / float(len(self.money_trail))
 
     def print_summary(self):
-        print "final units", self.player_money
-        print "num hands", len(self.money_trail)
-        print "winnings per hand", self.winnings_per_hand
-        #print running_total
-        print "min units=", min(self.money_trail)
-        print "max units=", max(self.money_trail)
-        print "Hours with 1 hand per minute=", len(self.money_trail) / 60
+        print("final units", self.player_money)
+        print("num hands", len(self.money_trail))
+        print("winnings per hand", self.winnings_per_hand)
+        #print(running_total
+        print("min units=", min(self.money_trail))
+        print("max units=", max(self.money_trail))
+        print("Hours with 1 hand per minute=", len(self.money_trail) / 60)
         end = self.player_money
-        print "$25 units=", end * 25
-        print "$5 units=", end * 5
-
-
-if __name__ == "__main__":
-    g = Game()
-    for i in range(50000):  # shoes
-        while len(g.shoe) > 26:
-            g.play_hand()
-        g.shuffle()
-    print g.player_money
-    print len(g.bets)
-    print g.player_money / float(len(g.bets))
-
+        print("$25 units=", end * 25)
+        print("$5 units=", end * 5)
 
